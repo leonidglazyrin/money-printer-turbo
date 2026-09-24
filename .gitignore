@@ -1,0 +1,11 @@
+test/
+docs/
+Dockerfile.gpu
+Dockerfile.claude
+docker-compose*.yml
+webui.bat
+webui.sh
+resource/songs/*.mp3
+__pycache__/
+*.pyc
+config.toml
