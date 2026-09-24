@@ -3037,6 +3037,55 @@ def _build_subtitle_items_from_legacy_submaker_words(sub_maker: SubMaker) -> lis
     return sub_items
 
 
+def _fallback_subtitle_items_proportional(sub_maker: SubMaker, script_lines: list[str]) -> list[str]:
+    """
+    兜底字幕时间轴：当 TTS 词级时间戳与脚本断句无法一一匹配时，
+    不再直接丢弃全部字幕，而是按每行字数占比，把整段音频时长
+    按比例分配给各脚本行。时间轴不如词级精准，但总比没有字幕好。
+    """
+    formatter = _build_subtitle_formatter()
+    lines = [line.strip() for line in script_lines if line and line.strip()]
+    if not lines:
+        return []
+
+    start_time = end_time = None
+    cues = [c for c in getattr(sub_maker, "cues", []) or []]
+    if cues:
+        start_time = int(cues[0].start.total_seconds() * 10000000)
+        end_time = int(cues[-1].end.total_seconds() * 10000000)
+    else:
+        legacy_offsets = getattr(sub_maker, "offset", []) or []
+        if legacy_offsets:
+            start_time = int(legacy_offsets[0][0])
+            end_time = int(legacy_offsets[-1][1])
+
+    if start_time is None or end_time is None or end_time <= start_time:
+        return []
+
+    total_chars = sum(len(line) for line in lines) or 1
+    total_span = end_time - start_time
+    sub_items = []
+    cursor = start_time
+    for idx, line in enumerate(lines):
+        if idx == len(lines) - 1:
+            seg_end = end_time
+        else:
+            seg_end = cursor + int(total_span * len(line) / total_chars)
+            seg_end = min(seg_end, end_time)
+        if seg_end <= cursor:
+            seg_end = cursor + 1
+        sub_items.append(
+            formatter(
+                idx=idx + 1,
+                start_time=int(cursor),
+                end_time=int(seg_end),
+                sub_text=line,
+            )
+        )
+        cursor = seg_end
+    return sub_items
+
+
 def create_subtitle(
     sub_maker: SubMaker,
     text: str,
@@ -3071,9 +3120,12 @@ def create_subtitle(
 
         if len(sub_items) != len(script_lines):
             logger.warning(
-                f"failed, sub_items len: {len(sub_items)}, script_lines len: {len(script_lines)}"
+                f"failed, sub_items len: {len(sub_items)}, script_lines len: {len(script_lines)}; "
+                "falling back to proportional timing so the video still gets subtitles"
             )
-            return
+            sub_items = _fallback_subtitle_items_proportional(sub_maker, script_lines)
+            if not sub_items:
+                return
 
         _write_subtitle_items(sub_items, subtitle_file)
     except Exception as e:
